@@ -1,0 +1,6 @@
+.env
+outputs/
+temp_frames/
+venv/
+__pycache__/
+*.pyc
