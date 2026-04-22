@@ -45,25 +45,39 @@ def extract_frames(video_path, interval_seconds=5):
     cap.release()
     return frame_paths, duration
 
+import time
+
 # STEP 3 — Scene analyser function
 def analyse_video_scenes(frame_paths):
     """Analyses video frames using Gemini to generate a music prompt."""
     descriptions = []
     prompt_single = "Analyse this video frame and return a short music description for it. Focus on: mood (calm/tense/joyful/melancholic/energetic/dramatic), energy level (low/medium/high), and setting (nature/urban/indoor/action/romantic). Return only 1-2 sentences describing what kind of music would suit this scene. Be specific about instruments and tempo."
     
+    # Use gemini-1.5-flash for better free-tier availability and quota
+    model_name = "gemini-1.5-flash"
+    
     for path in frame_paths:
         img = Image.open(path)
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[prompt_single, img]
-        )
-        descriptions.append(response.text)
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[prompt_single, img]
+            )
+            descriptions.append(response.text)
+            # Add a small delay to avoid hitting rate limits
+            time.sleep(2) 
+        except Exception as e:
+            print(f"Warning: Failed to analyse frame {path}: {e}")
+            continue
     
+    if not descriptions:
+        raise Exception("Failed to analyse any frames. Please check your API quota.")
+        
     combined_descriptions = "\n".join(descriptions)
     prompt_summary = f"Here are music descriptions for different scenes of a video: {combined_descriptions}. Summarise these into a single cohesive music prompt of 2-3 sentences that would work as a background soundtrack for the whole video. Mention specific instruments, mood, tempo, and energy."
     
     summary_response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model=model_name,
         contents=prompt_summary
     )
     return summary_response.text
@@ -143,12 +157,20 @@ def process_video(video_file, interval, show_desc):
         return final_video_path, music_description if show_desc else "", status
         
     except Exception as e:
-        print(f"Error: {e}")
-        if "Gemini" in str(e):
-            return None, "", "Scene analysis failed. Check your API key and internet connection."
-        elif "Lyria" in str(e):
-            return None, "", "Music generation failed. The Lyria 3 Pro model may be temporarily unavailable."
-        return None, "", f"An unexpected error occurred: {e}"
+        error_msg = str(e)
+        print(f"Error: {error_msg}")
+        
+        # Specific help for common API errors
+        if "403" in error_msg or "PermissionDenied" in error_msg:
+            status = "API Key Error: Permission Denied. Ensure Gemini API is enabled in AI Studio."
+        elif "429" in error_msg:
+            status = "API Error: Rate limit exceeded. Please wait a moment."
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            status = "API Error: Model not found. Trying a different model might help."
+        else:
+            status = f"An error occurred: {error_msg}"
+            
+        return None, "", status
     finally:
         if os.path.exists("temp_frames"):
             shutil.rmtree("temp_frames")
